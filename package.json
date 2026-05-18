@@ -12,11 +12,15 @@
       "./index.js"
     ]
   },
-  "dependencies": {},
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "puppeteer-core": "^23.0.0"
+  },
   "devDependencies": {
     "vitest": "^3.0.0"
   },
   "scripts": {
+    "start": "node main_browser.js",
     "test": "vitest run",
     "test:watch": "vitest"
   }
