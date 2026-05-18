@@ -12,18 +12,18 @@ import { sendMessageZalouser } from "/Users/cya/.openclaw/npm/node_modules/@open
 const CHANNEL_ID = "zalouser";
 const LOG_PATH = join(process.env.HOME ?? ".", ".openclaw", "logs", "faq-autoreply.jsonl");
 const AGENT_ID = "main";
-const AI_CONFIDENCE_THRESHOLD = 0.82;
+const AI_CONFIDENCE_THRESHOLD = 0.85;
 const FAQS = [
-  { question: "hello", answer: "Hi! How can I help you today?" },
-  { question: "how are you", answer: "I'm doing great. Thanks for asking!" },
-  { question: "what is your name", answer: "My name is Kataa Bot." },
-  { question: "who created you", answer: "I was created by my developer using OpenClaw." },
-  { question: "what can you do", answer: "I can automatically reply to approved questions." },
-  { question: "where are you from", answer: "I'm running from a cloud server." },
-  { question: "good morning", answer: "Good morning! Hope you have a great day." },
-  { question: "good night", answer: "Good night! Sleep well." },
-  { question: "bye", answer: "Goodbye! See you again soon." },
-  { question: "hola", answer: "kataa" }
+  { question: "hello", aliases: ["hi", "hey", "heyy", "helo", "heloo"], answer: "Hi! How can I help you today?" },
+  { question: "how are you", aliases: ["how r u", "how are u", "hows it going", "how's it going", "how do you do"], answer: "I'm doing great. Thanks for asking!" },
+  { question: "what is your name", aliases: ["whats your name", "what's your name", "your name", "who are you"], answer: "My name is Kataa Bot." },
+  { question: "who created you", aliases: ["who made you", "who built you", "who is your creator"], answer: "I was created by my developer using OpenClaw." },
+  { question: "what can you do", aliases: ["what do you do", "your features", "your abilities", "help me"], answer: "I can automatically reply to approved questions." },
+  { question: "where are you from", aliases: ["where do you live", "where are you located"], answer: "I'm running from a cloud server." },
+  { question: "good morning", aliases: ["gm", "morning", "gud morning", "goood morning"], answer: "Good morning! Hope you have a great day." },
+  { question: "good night", aliases: ["gn", "nite", "goodnite", "good nite", "night"], answer: "Good night! Sleep well." },
+  { question: "bye", aliases: ["goodbye", "cya", "see you", "see ya", "ttyl", "bbye"], answer: "Goodbye! See you again soon." },
+  { question: "hola", aliases: ["ola", "holla"], answer: "kataa" }
 ];
 
 const processedMessages = new Map();
@@ -111,13 +111,17 @@ function writeDecisionLog({ event, ctx, incoming, matchedFaq, reply, confidence,
 }
 
 function buildFaqClassifierPrompt(message) {
-  const faqLines = FAQS.map((faq, index) => `${index + 1}. ${faq.question}`).join("\n");
+  const faqLines = FAQS.map((faq, index) => {
+    const aliases = faq.aliases?.length ? ` (also: ${faq.aliases.join(", ")})` : "";
+    return `${index + 1}. ${faq.question}${aliases}`;
+  }).join("\n");
   return `Incoming message:
 ${message}
 
-Approved FAQ questions:
+Approved FAQ questions (with common aliases and variations):
 ${faqLines}
 
+Match by meaning — accept typos, paraphrases, and synonyms. Assign confidence 0.0–1.0 based on semantic similarity.
 Return JSON only with this shape: {"faqNumber": number|null, "confidence": number, "reason": string}.`;
 }
 
@@ -158,9 +162,11 @@ async function classifyFaqWithAi(incoming) {
     auth: prepared.auth,
     context: {
       systemPrompt: [
-        "You are a strict FAQ classifier.",
-        "Compare the incoming message to the approved FAQ questions.",
-        "Select a FAQ only when the user's intent is clearly the same.",
+        "You are a semantic FAQ classifier.",
+        "Compare the incoming message to the approved FAQ questions and their aliases by MEANING, not exact text.",
+        "Accept typos, paraphrases, synonyms, and informal phrasing as matches when the intent is the same.",
+        "Assign a confidence score from 0.0 to 1.0 reflecting how closely the meaning matches.",
+        "Select a FAQ only when semantic similarity is clear; do not guess on ambiguous messages.",
         "Do not answer the user.",
         "Do not invent new FAQs.",
         "Return JSON only."
