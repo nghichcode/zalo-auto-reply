@@ -1,0 +1,16 @@
+{
+  "name": "@local/hola-autoreply",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./index.js",
+  "private": true,
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "runtimeExtensions": [
+      "./index.js"
+    ]
+  },
+  "dependencies": {}
+}
