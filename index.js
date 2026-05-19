@@ -131,7 +131,7 @@ function getPreparedClassifier() {
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId: AGENT_ID,
-      modelRef: "openai/gpt-5.4-mini",
+      modelRef: "openai/gpt-4o-mini",
       allowBundledStaticCatalogFallback: true,
       skipPiDiscovery: true
     });
