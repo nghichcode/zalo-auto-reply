@@ -1,34 +1,23 @@
-import { mkdirSync, appendFileSync } from "node:fs";
+import { mkdirSync, appendFileSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  completeWithPreparedSimpleCompletionModel,
-  extractAssistantText,
-  prepareSimpleCompletionModelForAgent
-} from "openclaw/plugin-sdk/simple-completion-runtime";
-import { sendMessageZalouser } from "/Users/cya/.openclaw/npm/node_modules/@openclaw/zalouser/dist/test-api.js";
+import Fuse from "fuse.js";
 
+const { sendMessageZalouser } = await import(
+  pathToFileURL(join(homedir(), ".openclaw", "npm", "node_modules", "@openclaw", "zalouser", "dist", "test-api.js")).href
+);
+
+const PLUGIN_ROOT = dirname(fileURLToPath(import.meta.url));
+const FAQ_PATH = join(PLUGIN_ROOT, "faq.json");
 const CHANNEL_ID = "zalouser";
 const LOG_PATH = join(process.env.HOME ?? ".", ".openclaw", "logs", "faq-autoreply.jsonl");
-const AGENT_ID = "main";
-const AI_CONFIDENCE_THRESHOLD = 0.85;
-const FAQS = [
-  { question: "hello", aliases: ["hi", "hey", "heyy", "helo", "heloo"], answer: "Hi! How can I help you today?" },
-  { question: "how are you", aliases: ["how r u", "how are u", "hows it going", "how's it going", "how do you do"], answer: "I'm doing great. Thanks for asking!" },
-  { question: "what is your name", aliases: ["whats your name", "what's your name", "your name", "who are you"], answer: "My name is Kataa Bot." },
-  { question: "who created you", aliases: ["who made you", "who built you", "who is your creator"], answer: "I was created by my developer using OpenClaw." },
-  { question: "what can you do", aliases: ["what do you do", "your features", "your abilities", "help me"], answer: "I can automatically reply to approved questions." },
-  { question: "where are you from", aliases: ["where do you live", "where are you located"], answer: "I'm running from a cloud server." },
-  { question: "good morning", aliases: ["gm", "morning", "gud morning", "goood morning"], answer: "Good morning! Hope you have a great day." },
-  { question: "good night", aliases: ["gn", "nite", "goodnite", "good nite", "night"], answer: "Good night! Sleep well." },
-  { question: "bye", aliases: ["goodbye", "cya", "see you", "see ya", "ttyl", "bbye"], answer: "Goodbye! See you again soon." },
-  { question: "hola", aliases: ["ola", "holla"], answer: "kataa" }
-];
+const MAX_SCORE = 0.35;
+const AMBIGUITY_GAP = 0.08;
+const DEDUPE_TTL_MS = 6 * 60 * 60 * 1000;
 
 const processedMessages = new Map();
-const DEDUPE_TTL_MS = 6 * 60 * 60 * 1000;
-let preparedClassifierPromise;
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim().replace(/\s+/g, " ").toLowerCase() : "";
@@ -95,108 +84,92 @@ function rememberMessage(messageId) {
   return true;
 }
 
-function writeDecisionLog({ event, ctx, incoming, matchedFaq, reply, confidence, reason }) {
+function loadFaqs() {
+  try {
+    const raw = JSON.parse(readFileSync(FAQ_PATH, "utf8"));
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((entry) => {
+        const question = typeof entry?.question === "string" ? entry.question : "";
+        const answer = typeof entry?.answer === "string" ? entry.answer : "";
+        const aliases = Array.isArray(entry?.aliases)
+          ? entry.aliases.filter((a) => typeof a === "string")
+          : [];
+        if (!question.trim() || !answer) return null;
+        return {
+          question,
+          aliases,
+          answer,
+          normalizedQuestion: normalizeText(question),
+          normalizedAliases: aliases.map(normalizeText).filter(Boolean)
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function findFaqMatch(messageText) {
+  const faqs = loadFaqs();
+  const normalized = normalizeText(messageText);
+
+  if (!normalized) return { faq: null, score: null, matchType: null, skippedReason: "empty_message" };
+  if (faqs.length === 0) return { faq: null, score: null, matchType: null, skippedReason: "no_faqs" };
+
+  for (const faq of faqs) {
+    if (faq.normalizedQuestion === normalized) return { faq, score: 0, matchType: "exact_question", skippedReason: null };
+    if (faq.normalizedAliases.includes(normalized)) return { faq, score: 0, matchType: "exact_alias", skippedReason: null };
+  }
+
+  const rows = faqs.flatMap((faq) => [
+    { text: faq.normalizedQuestion, kind: "question", faq },
+    ...faq.normalizedAliases.map((alias) => ({ text: alias, kind: "alias", faq }))
+  ]);
+
+  const fuse = new Fuse(rows, {
+    keys: ["text"],
+    includeScore: true,
+    ignoreLocation: true,
+    threshold: MAX_SCORE,
+    minMatchCharLength: 2
+  });
+
+  const results = fuse.search(normalized, { limit: 4 });
+  const best = results[0];
+
+  if (!best) return { faq: null, score: null, matchType: "fuzzy", skippedReason: "no_fuzzy_match" };
+
+  const bestScore = typeof best.score === "number" ? best.score : 1;
+  if (bestScore > MAX_SCORE) return { faq: null, score: bestScore, matchType: "fuzzy", skippedReason: "weak_match" };
+
+  const competing = results.find((r) => r.item.faq !== best.item.faq);
+  if (competing && typeof competing.score === "number" && competing.score - bestScore < AMBIGUITY_GAP) {
+    return { faq: null, score: bestScore, matchType: "fuzzy", skippedReason: "ambiguous_match" };
+  }
+
+  return {
+    faq: best.item.faq,
+    score: bestScore,
+    matchType: best.item.kind === "question" ? "fuzzy_question" : "fuzzy_alias",
+    skippedReason: null
+  };
+}
+
+function writeDecisionLog({ event, ctx, incoming, matchedFaq, reply, fuseScore, matchType, skippedReason }) {
   const record = {
     timestamp: timestampFromEvent(event),
     sender: senderFromEvent(event, ctx),
     incomingMessage: incoming,
     matchedFaq: matchedFaq?.question ?? null,
-    confidence: typeof confidence === "number" ? confidence : null,
+    fuseScore: fuseScore ?? null,
+    matchType: matchType ?? null,
     reply: reply ?? null,
-    reason: reason ?? null
+    skippedReason: skippedReason ?? null
   };
   mkdirSync(dirname(LOG_PATH), { recursive: true });
   appendFileSync(LOG_PATH, JSON.stringify(record) + "\n", "utf8");
   console.log("[faq-autoreply] " + JSON.stringify(record));
-}
-
-function buildFaqClassifierPrompt(message) {
-  const faqLines = FAQS.map((faq, index) => {
-    const aliases = faq.aliases?.length ? ` (also: ${faq.aliases.join(", ")})` : "";
-    return `${index + 1}. ${faq.question}${aliases}`;
-  }).join("\n");
-  return `Incoming message:
-${message}
-
-Approved FAQ questions (with common aliases and variations):
-${faqLines}
-
-Match by meaning — accept typos, paraphrases, and synonyms. Assign confidence 0.0–1.0 based on semantic similarity.
-Return JSON only with this shape: {"faqNumber": number|null, "confidence": number, "reason": string}.`;
-}
-
-function getPreparedClassifier() {
-  preparedClassifierPromise ??= (async () => {
-    const cfg = await getRuntimeConfig();
-    const prepared = await prepareSimpleCompletionModelForAgent({
-      cfg,
-      agentId: AGENT_ID,
-      modelRef: "openai/gpt-4o-mini",
-      allowBundledStaticCatalogFallback: true,
-      skipPiDiscovery: true
-    });
-    if ("error" in prepared) throw new Error(prepared.error);
-    return { cfg, model: prepared.model, auth: prepared.auth };
-  })();
-  return preparedClassifierPromise;
-}
-
-function parseClassifierJson(text) {
-  const trimmed = text.trim();
-  const jsonText = trimmed.startsWith("{")
-    ? trimmed
-    : trimmed.match(/\{[\s\S]*\}/)?.[0] ?? "";
-  if (!jsonText) return null;
-  try {
-    return JSON.parse(jsonText);
-  } catch {
-    return null;
-  }
-}
-
-async function classifyFaqWithAi(incoming) {
-  const prepared = await getPreparedClassifier();
-  const result = await completeWithPreparedSimpleCompletionModel({
-    cfg: prepared.cfg,
-    model: prepared.model,
-    auth: prepared.auth,
-    context: {
-      systemPrompt: [
-        "You are a semantic FAQ classifier.",
-        "Compare the incoming message to the approved FAQ questions and their aliases by MEANING, not exact text.",
-        "Accept typos, paraphrases, synonyms, and informal phrasing as matches when the intent is the same.",
-        "Assign a confidence score from 0.0 to 1.0 reflecting how closely the meaning matches.",
-        "Select a FAQ only when semantic similarity is clear; do not guess on ambiguous messages.",
-        "Do not answer the user.",
-        "Do not invent new FAQs.",
-        "Return JSON only."
-      ].join(" "),
-      messages: [{
-        role: "user",
-        content: buildFaqClassifierPrompt(incoming),
-        timestamp: Date.now()
-      }]
-    },
-    options: {
-      maxTokens: 120,
-      reasoning: "low"
-    }
-  });
-  const parsed = parseClassifierJson(extractAssistantText(result) ?? "");
-  const faqNumber = Number(parsed?.faqNumber);
-  const confidence = Number(parsed?.confidence);
-  if (!Number.isInteger(faqNumber) || faqNumber < 1 || faqNumber > FAQS.length) {
-    return {
-      matchedFaq: null,
-      confidence: Number.isFinite(confidence) ? confidence : 0,
-      reason: typeof parsed?.reason === "string" ? parsed.reason : "no faq selected"
-    };
-  }
-  return {
-    matchedFaq: FAQS[faqNumber - 1],
-    confidence: Number.isFinite(confidence) ? confidence : 0,
-    reason: typeof parsed?.reason === "string" ? parsed.reason : null
-  };
 }
 
 async function sendFaqReply(event, ctx, reply) {
@@ -219,30 +192,27 @@ async function handleFaq(event, ctx = {}) {
   const messageId = messageIdFromEvent(event, ctx, normalized);
 
   if (isOwnMessage(event, ctx)) {
-    writeDecisionLog({ event, ctx, incoming, matchedFaq: null, reply: null, reason: "own message" });
+    writeDecisionLog({ event, ctx, incoming, matchedFaq: null, reply: null, skippedReason: "own_message" });
     return { handled: true };
   }
 
   if (!rememberMessage(messageId)) return { handled: true };
 
-  let classification;
-  try {
-    classification = await classifyFaqWithAi(incoming);
-  } catch (error) {
-    const reason = "ai classification failed: " + (error instanceof Error ? error.message : String(error));
-    writeDecisionLog({ event, ctx, incoming, matchedFaq: null, reply: null, confidence: 0, reason });
-    return { handled: true };
-  }
+  const { faq, score, matchType, skippedReason } = findFaqMatch(incoming);
+  writeDecisionLog({
+    event, ctx, incoming,
+    matchedFaq: faq ?? null,
+    reply: faq?.answer ?? null,
+    fuseScore: score,
+    matchType,
+    skippedReason
+  });
 
-  const { matchedFaq, confidence, reason } = classification;
-  const reply = matchedFaq && confidence >= AI_CONFIDENCE_THRESHOLD ? matchedFaq.answer : null;
-  writeDecisionLog({ event, ctx, incoming, matchedFaq: reply ? matchedFaq : null, reply, confidence, reason });
-
-  if (!reply) return { handled: true };
+  if (!faq) return { handled: true };
 
   await sleep(randomReplyDelayMs());
   try {
-    await sendFaqReply(event, ctx, reply);
+    await sendFaqReply(event, ctx, faq.answer);
   } catch (error) {
     console.error("[faq-autoreply] send failed: " + (error instanceof Error ? error.message : String(error)));
   }
