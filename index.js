@@ -5,9 +5,18 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import Fuse from "fuse.js";
 
-const { sendMessageZalouser } = await import(
-  pathToFileURL(join(homedir(), ".openclaw", "npm", "node_modules", "@openclaw", "zalouser", "dist", "test-api.js")).href
-);
+const ZALOUSER_TEST_API = pathToFileURL(
+  join(homedir(), ".openclaw", "npm", "node_modules", "@openclaw", "zalouser", "dist", "test-api.js")
+).href;
+
+let _sendMessageZalouser;
+async function getSendMessageZalouser() {
+  if (!_sendMessageZalouser) {
+    const mod = await import(ZALOUSER_TEST_API);
+    _sendMessageZalouser = mod.sendMessageZalouser;
+  }
+  return _sendMessageZalouser;
+}
 
 const PLUGIN_ROOT = dirname(fileURLToPath(import.meta.url));
 const FAQ_PATH = join(PLUGIN_ROOT, "faq.json");
@@ -175,6 +184,7 @@ function writeDecisionLog({ event, ctx, incoming, matchedFaq, reply, fuseScore, 
 async function sendFaqReply(event, ctx, reply) {
   const threadId = threadIdFromEvent(event, ctx);
   if (!threadId) throw new Error("Missing Zalo thread id");
+  const sendMessageZalouser = await getSendMessageZalouser();
   const result = await sendMessageZalouser(threadId, reply, {
     profile: ctx.accountId ?? event.accountId ?? "default",
     isGroup: event.isGroup === true
