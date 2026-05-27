@@ -72,7 +72,7 @@ function threadIdFromEvent(event, ctx) {
     ?? event.senderId
     ?? ctx.senderId;
   if (typeof raw !== "string") return "";
-  return raw.replace(/^(zalouser:group:|zalouser:)/i, "").trim();
+  return raw.replace(/^(zalouser:group:|zalouser:|group:)/i, "").trim();
 }
 
 function isOwnMessage(event, ctx) {
