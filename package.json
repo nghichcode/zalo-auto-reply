@@ -12,9 +12,7 @@
       "./index.js"
     ]
   },
-  "dependencies": {
-    "fuse.js": "^7.3.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "vitest": "^3.0.0"
   },

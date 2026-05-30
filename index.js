@@ -5,7 +5,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import { completeWithPreparedSimpleCompletionModel, extractAssistantText, prepareSimpleCompletionModelForAgent } from "openclaw/plugin-sdk/simple-completion-runtime";
-import Fuse from "fuse.js";
 
 const ZALOUSER_TEST_API = pathToFileURL(
   join(homedir(), ".openclaw", "npm", "node_modules", "@openclaw", "zalouser", "dist", "test-api.js")
@@ -96,8 +95,6 @@ const PLUGIN_ROOT = dirname(fileURLToPath(import.meta.url));
 const FAQ_PATH = join(PLUGIN_ROOT, "faq.csv");
 const CHANNEL_ID = "zalouser";
 const LOG_PATH = join(process.env.HOME ?? ".", ".openclaw", "logs", "faq-autoreply.jsonl");
-const MAX_SCORE = 0.35;
-const AMBIGUITY_GAP = 0.08;
 const DEDUPE_TTL_MS = 6 * 60 * 60 * 1000;
 const AGENT_ID = "main";
 const AI_CONFIDENCE_THRESHOLD = 0.4;
@@ -133,14 +130,6 @@ function updateConvHistory(threadId, userMessage, botReply) {
 function normalizeText(value) {
   if (typeof value !== "string") return "";
   return value.normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-function removeDiacritics(str) {
-  return str.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d");
-}
-
-function normalizeForFuzzy(value) {
-  return removeDiacritics(normalizeText(value));
 }
 
 function sleep(ms) {
@@ -232,96 +221,33 @@ function loadFaqs() {
   try {
     const rows = parseCsv(readFileSync(FAQ_PATH, "utf8"));
     if (rows.length < 2) return [];
-    return rows.slice(1)
-      .map((row) => {
-        const question = (row[0] ?? "").trim();
-        const answer = (row[1] ?? "").trim();
-        if (!question || !answer) return null;
-        const nq = normalizeText(question);
-        return {
-          question,
-          answer,
-          normalizedQuestion: nq,
-          normalizedAliases: [],
-          fuzzyQuestion: removeDiacritics(nq),
-          fuzzyAliases: []
-        };
-      })
-      .filter(Boolean);
+    return rows.slice(1).map((row) => {
+      const question = (row[0] ?? "").trim();
+      const answer = (row[1] ?? "").trim();
+      if (!question || !answer) return null;
+      return { question, answer };
+    }).filter(Boolean);
   } catch {
     return [];
   }
 }
 
-async function findFaqMatch(messageText) {
-  const faqs = loadFaqs();
-  const normalized = normalizeText(messageText);
-  const normalizedStripped = removeDiacritics(normalized);
-
-  if (!normalized) return { faq: null, score: null, matchType: null, skippedReason: "empty_message" };
-  if (faqs.length === 0) return { faq: null, score: null, matchType: null, skippedReason: "no_faqs" };
-
-  // Exact match — thử cả có dấu lẫn không dấu
-  for (const faq of faqs) {
-    if (faq.normalizedQuestion === normalized || faq.fuzzyQuestion === normalizedStripped)
-      return { faq, score: 0, matchType: "exact_question", skippedReason: null };
-    if (faq.normalizedAliases.includes(normalized) || faq.fuzzyAliases.includes(normalizedStripped))
-      return { faq, score: 0, matchType: "exact_alias", skippedReason: null };
-  }
-
-  // Fuzzy match — dùng text đã bỏ dấu để khớp cả khi user gõ không dấu
-  const rows = faqs.flatMap((faq) => [
-    { text: faq.fuzzyQuestion, kind: "question", faq },
-    ...faq.fuzzyAliases.map((alias) => ({ text: alias, kind: "alias", faq }))
-  ]);
-
-  const fuse = new Fuse(rows, {
-    keys: ["text"],
-    includeScore: true,
-    ignoreLocation: true,
-    threshold: MAX_SCORE,
-    minMatchCharLength: 1
-  });
-
-  const results = fuse.search(normalizedStripped, { limit: 4 });
-  const best = results[0];
-
-  if (!best) return { faq: null, score: null, matchType: "fuzzy", skippedReason: "no_fuzzy_match" };
-
-  const bestScore = typeof best.score === "number" ? best.score : 1;
-  if (bestScore > MAX_SCORE) return { faq: null, score: bestScore, matchType: "fuzzy", skippedReason: "weak_match" };
-
-  const competing = results.find((r) => r.item.faq !== best.item.faq);
-  if (competing && typeof competing.score === "number" && competing.score - bestScore < AMBIGUITY_GAP) {
-    return { faq: null, score: bestScore, matchType: "fuzzy", skippedReason: "ambiguous_match" };
-  }
-
-  return {
-    faq: best.item.faq,
-    score: bestScore,
-    matchType: best.item.kind === "question" ? "fuzzy_question" : "fuzzy_alias",
-    skippedReason: null
-  };
-}
-
 async function findFaqMatchWithAi(messageText, threadId = "") {
   const faqs = loadFaqs();
-  const fuseResult = await findFaqMatch(messageText);
-  if (fuseResult.faq) return fuseResult;
+  if (faqs.length === 0) return { faq: null, score: null, matchType: null, skippedReason: "no_faqs" };
 
-  // Fuse.js không match — thử AI fallback với lịch sử hội thoại
   const history = getConvHistory(threadId);
   let aiResult;
   try {
     aiResult = await classifyWithAi(messageText, faqs, history);
   } catch (error) {
-    console.error("[faq-autoreply] AI fallback error: " + (error instanceof Error ? error.message : String(error)));
-    return { ...fuseResult, skippedReason: "ai_error" };
+    console.error("[faq-autoreply] AI error: " + (error instanceof Error ? error.message : String(error)));
+    return { faq: null, score: null, matchType: "ai", skippedReason: "ai_error" };
   }
 
   const { faq, confidence } = aiResult;
   if (!faq || confidence < AI_CONFIDENCE_THRESHOLD) {
-    return { faq: null, score: null, matchType: "ai", skippedReason: `ai_low_confidence:${confidence.toFixed(2)}` };
+    return { faq: null, score: confidence ?? null, matchType: "ai", skippedReason: `ai_low_confidence:${(confidence ?? 0).toFixed(2)}` };
   }
   return { faq, score: confidence, matchType: "ai", skippedReason: null };
 }
@@ -367,6 +293,7 @@ async function handleFaq(event, ctx = {}) {
     return { handled: true };
   }
 
+  if (!normalized) return { handled: true };
   if (!rememberMessage(messageId)) return { handled: true };
 
   const threadId = threadIdFromEvent(event, ctx);
