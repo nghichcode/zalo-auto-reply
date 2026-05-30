@@ -83,7 +83,7 @@ async function classifyWithAi(incoming, faqs) {
 }
 
 const PLUGIN_ROOT = dirname(fileURLToPath(import.meta.url));
-const FAQ_PATH = join(PLUGIN_ROOT, "faq.json");
+const FAQ_PATH = join(PLUGIN_ROOT, "faq.csv");
 const CHANNEL_ID = "zalouser";
 const LOG_PATH = join(process.env.HOME ?? ".", ".openclaw", "logs", "faq-autoreply.jsonl");
 const MAX_SCORE = 0.35;
@@ -168,28 +168,47 @@ function rememberMessage(messageId) {
   return true;
 }
 
+function parseCsv(text) {
+  const rows = [];
+  let field = "";
+  let inQuotes = false;
+  let row = [];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (inQuotes) {
+      if (ch === '"' && next === '"') { field += '"'; i++; }
+      else if (ch === '"') inQuotes = false;
+      else field += ch;
+    } else {
+      if (ch === '"') inQuotes = true;
+      else if (ch === ',') { row.push(field); field = ""; }
+      else if (ch === '\r' && next === '\n') { row.push(field); rows.push(row); row = []; field = ""; i++; }
+      else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ""; }
+      else field += ch;
+    }
+  }
+  if (row.length > 0 || field) { row.push(field); if (row.some(f => f.trim())) rows.push(row); }
+  return rows;
+}
+
 function loadFaqs() {
   try {
-    const raw = JSON.parse(readFileSync(FAQ_PATH, "utf8"));
-    if (!Array.isArray(raw)) return [];
-    return raw
-      .map((entry) => {
-        const question = typeof entry?.question === "string" ? entry.question : "";
-        const answer = typeof entry?.answer === "string" ? entry.answer : "";
-        const aliases = Array.isArray(entry?.aliases)
-          ? entry.aliases.filter((a) => typeof a === "string")
-          : [];
-        if (!question.trim() || !answer) return null;
+    const rows = parseCsv(readFileSync(FAQ_PATH, "utf8"));
+    if (rows.length < 2) return [];
+    return rows.slice(1)
+      .map((row) => {
+        const question = (row[0] ?? "").trim();
+        const answer = (row[1] ?? "").trim();
+        if (!question || !answer) return null;
         const nq = normalizeText(question);
-        const na = aliases.map(normalizeText).filter(Boolean);
         return {
           question,
-          aliases,
           answer,
           normalizedQuestion: nq,
-          normalizedAliases: na,
+          normalizedAliases: [],
           fuzzyQuestion: removeDiacritics(nq),
-          fuzzyAliases: na.map(removeDiacritics).filter(Boolean)
+          fuzzyAliases: []
         };
       })
       .filter(Boolean);
