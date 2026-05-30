@@ -39,11 +39,8 @@ function getPreparedClassifier() {
 async function classifyWithAi(incoming, faqs) {
   const prepared = await getPreparedClassifier();
   const faqList = faqs
-    .map((faq, i) => {
-      const aliases = faq.aliases?.length ? ` (aliases: ${faq.aliases.slice(0, 4).join(", ")})` : "";
-      return `${i + 1}. ${faq.question}${aliases}`;
-    })
-    .join("\n");
+    .map((faq, i) => `${i + 1}. Q: ${faq.question}\n   A: ${faq.answer}`)
+    .join("\n\n");
 
   const result = await completeWithPreparedSimpleCompletionModel({
     cfg: prepared.cfg,
@@ -51,31 +48,35 @@ async function classifyWithAi(incoming, faqs) {
     auth: prepared.auth,
     context: {
       systemPrompt: [
-        "Bạn là hệ thống phân loại FAQ.",
-        "Cho một tin nhắn đầu vào, hãy tìm câu hỏi FAQ phù hợp nhất về mặt ngữ nghĩa.",
-        "Chấp nhận gõ tắt, gõ không dấu, paraphrase, lỗi chính tả, câu hỏi không đầy đủ.",
-        "Chỉ chọn FAQ khi ý nghĩa rõ ràng trùng khớp. Nếu không chắc, trả faqIndex null.",
-        "Không trả lời câu hỏi người dùng. Không bịa thêm FAQ. Chỉ trả JSON."
+        "Bạn là hệ thống trả lời FAQ.",
+        "Chỉ được dùng thông tin trong danh sách FAQ bên dưới.",
+        "TUYỆT ĐỐI không dùng kiến thức bên ngoài, không tra mạng, không tự bịa thêm.",
+        "Nếu câu hỏi liên quan: trả về faqIndex của mục phù hợp nhất và trích nguyên câu trả lời A của mục đó vào answer.",
+        "Nếu không liên quan đến bất kỳ FAQ nào: faqIndex null, answer null.",
+        "Chỉ trả JSON."
       ].join(" "),
       messages: [{
         role: "user",
-        content: `Tin nhắn: "${incoming}"\n\nDanh sách FAQ:\n${faqList}\n\nTrả về JSON: {"faqIndex": number|null, "confidence": number (0.0-1.0), "reason": string}`,
+        content: `Tin nhắn: "${incoming}"\n\nDanh sách FAQ:\n${faqList}\n\nTrả về JSON: {"faqIndex": number|null, "answer": string|null, "confidence": number (0.0-1.0)}`,
         timestamp: Date.now()
       }]
     },
-    options: { maxTokens: 100, reasoning: "low" }
+    options: { maxTokens: 300, reasoning: "low" }
   });
 
   const text = extractAssistantText(result) ?? "";
   const jsonStr = text.trim().startsWith("{") ? text.trim() : (text.match(/\{[\s\S]*\}/) ?? [""])[0];
   try {
     const parsed = JSON.parse(jsonStr);
-    const idx = Number(parsed?.faqIndex);
     const confidence = Number(parsed?.confidence) || 0;
-    const reason = typeof parsed?.reason === "string" ? parsed.reason : null;
-    if (!Number.isInteger(idx) || idx < 1 || idx > faqs.length)
-      return { faq: null, confidence, reason: reason ?? "no faq selected" };
-    return { faq: faqs[idx - 1], confidence, reason };
+    const idx = Number(parsed?.faqIndex);
+    // Dùng answer từ AI (đã được nhắc chỉ trích từ FAQ), fallback về faq.answer nếu có index hợp lệ
+    const aiAnswer = typeof parsed?.answer === "string" && parsed.answer.trim() ? parsed.answer.trim() : null;
+    if (!Number.isInteger(idx) || idx < 1 || idx > faqs.length) {
+      if (!aiAnswer) return { faq: null, confidence, reason: "no faq selected" };
+      return { faq: { question: null, answer: aiAnswer }, confidence, reason: null };
+    }
+    return { faq: { ...faqs[idx - 1], answer: aiAnswer ?? faqs[idx - 1].answer }, confidence, reason: null };
   } catch {
     return { faq: null, confidence: 0, reason: "json parse error" };
   }
