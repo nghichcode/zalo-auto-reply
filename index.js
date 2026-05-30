@@ -36,11 +36,17 @@ function getPreparedClassifier() {
   return _preparedClassifierPromise;
 }
 
-async function classifyWithAi(incoming, faqs) {
+async function classifyWithAi(incoming, faqs, history = []) {
   const prepared = await getPreparedClassifier();
   const faqList = faqs
     .map((faq, i) => `${i + 1}. Q: ${faq.question}\n   A: ${faq.answer}`)
     .join("\n\n");
+
+  const historyMessages = history.map(msg => ({
+    role: msg.role,
+    content: msg.content,
+    timestamp: msg.timestamp
+  }));
 
   const result = await completeWithPreparedSimpleCompletionModel({
     cfg: prepared.cfg,
@@ -51,15 +57,19 @@ async function classifyWithAi(incoming, faqs) {
         "Bạn là hệ thống trả lời FAQ.",
         "Chỉ được dùng thông tin trong danh sách FAQ bên dưới.",
         "TUYỆT ĐỐI không dùng kiến thức bên ngoài, không tra mạng, không tự bịa thêm.",
+        "Dựa vào lịch sử hội thoại (nếu có) để hiểu ngữ cảnh của câu hỏi hiện tại.",
         "Nếu câu hỏi liên quan: trả về faqIndex của mục phù hợp nhất và trích nguyên câu trả lời A của mục đó vào answer.",
         "Nếu không liên quan đến bất kỳ FAQ nào: faqIndex null, answer null.",
         "Chỉ trả JSON."
       ].join(" "),
-      messages: [{
-        role: "user",
-        content: `Tin nhắn: "${incoming}"\n\nDanh sách FAQ:\n${faqList}\n\nTrả về JSON: {"faqIndex": number|null, "answer": string|null, "confidence": number (0.0-1.0)}`,
-        timestamp: Date.now()
-      }]
+      messages: [
+        ...historyMessages,
+        {
+          role: "user",
+          content: `Tin nhắn: "${incoming}"\n\nDanh sách FAQ:\n${faqList}\n\nTrả về JSON: {"faqIndex": number|null, "answer": string|null, "confidence": number (0.0-1.0)}`,
+          timestamp: Date.now()
+        }
+      ]
     },
     options: { maxTokens: 300, reasoning: "low" }
   });
@@ -91,8 +101,34 @@ const AMBIGUITY_GAP = 0.08;
 const DEDUPE_TTL_MS = 6 * 60 * 60 * 1000;
 const AGENT_ID = "main";
 const AI_CONFIDENCE_THRESHOLD = 0.4;
+const CONV_TTL_MS = 30 * 60 * 1000;
+const MAX_CONV_MESSAGES = 10;
 
 const processedMessages = new Map();
+const conversationHistory = new Map();
+
+function getConvHistory(threadId) {
+  const entry = conversationHistory.get(threadId);
+  if (!entry) return [];
+  if (Date.now() - entry.lastActivity > CONV_TTL_MS) {
+    conversationHistory.delete(threadId);
+    return [];
+  }
+  return entry.messages;
+}
+
+function updateConvHistory(threadId, userMessage, botReply) {
+  const entry = conversationHistory.get(threadId) ?? { messages: [], lastActivity: 0 };
+  entry.messages.push({ role: "user", content: userMessage, timestamp: Date.now() });
+  if (botReply) {
+    entry.messages.push({ role: "assistant", content: botReply, timestamp: Date.now() });
+  }
+  if (entry.messages.length > MAX_CONV_MESSAGES) {
+    entry.messages = entry.messages.slice(-MAX_CONV_MESSAGES);
+  }
+  entry.lastActivity = Date.now();
+  conversationHistory.set(threadId, entry);
+}
 
 function normalizeText(value) {
   if (typeof value !== "string") return "";
@@ -268,21 +304,22 @@ async function findFaqMatch(messageText) {
   };
 }
 
-async function findFaqMatchWithAi(messageText) {
+async function findFaqMatchWithAi(messageText, threadId = "") {
   const faqs = loadFaqs();
   const fuseResult = await findFaqMatch(messageText);
   if (fuseResult.faq) return fuseResult;
 
-  // Fuse.js không match — thử AI fallback
+  // Fuse.js không match — thử AI fallback với lịch sử hội thoại
+  const history = getConvHistory(threadId);
   let aiResult;
   try {
-    aiResult = await classifyWithAi(messageText, faqs);
+    aiResult = await classifyWithAi(messageText, faqs, history);
   } catch (error) {
     console.error("[faq-autoreply] AI fallback error: " + (error instanceof Error ? error.message : String(error)));
     return { ...fuseResult, skippedReason: "ai_error" };
   }
 
-  const { faq, confidence, reason } = aiResult;
+  const { faq, confidence } = aiResult;
   if (!faq || confidence < AI_CONFIDENCE_THRESHOLD) {
     return { faq: null, score: null, matchType: "ai", skippedReason: `ai_low_confidence:${confidence.toFixed(2)}` };
   }
@@ -332,7 +369,8 @@ async function handleFaq(event, ctx = {}) {
 
   if (!rememberMessage(messageId)) return { handled: true };
 
-  const { faq, score, matchType, skippedReason } = await findFaqMatchWithAi(incoming);
+  const threadId = threadIdFromEvent(event, ctx);
+  const { faq, score, matchType, skippedReason } = await findFaqMatchWithAi(incoming, threadId);
   writeDecisionLog({
     event, ctx, incoming,
     matchedFaq: faq ?? null,
@@ -342,11 +380,15 @@ async function handleFaq(event, ctx = {}) {
     skippedReason
   });
 
-  if (!faq) return { handled: true };
+  if (!faq) {
+    updateConvHistory(threadId, incoming, null);
+    return { handled: true };
+  }
 
   await sleep(randomReplyDelayMs());
   try {
     await sendFaqReply(event, ctx, faq.answer);
+    updateConvHistory(threadId, incoming, faq.answer);
   } catch (error) {
     console.error("[faq-autoreply] send failed: " + (error instanceof Error ? error.message : String(error)));
   }
