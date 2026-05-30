@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
+import { completeWithPreparedSimpleCompletionModel, extractAssistantText, prepareSimpleCompletionModelForAgent } from "openclaw/plugin-sdk/simple-completion-runtime";
 import Fuse from "fuse.js";
 
 const ZALOUSER_TEST_API = pathToFileURL(
@@ -18,6 +20,67 @@ async function getSendMessageZalouser() {
   return _sendMessageZalouser;
 }
 
+let _preparedClassifierPromise;
+function getPreparedClassifier() {
+  _preparedClassifierPromise ??= (async () => {
+    const cfg = await getRuntimeConfig();
+    const prepared = await prepareSimpleCompletionModelForAgent({
+      cfg,
+      agentId: AGENT_ID,
+      allowBundledStaticCatalogFallback: true,
+      skipPiDiscovery: true
+    });
+    if ("error" in prepared) throw new Error(prepared.error);
+    return { cfg, model: prepared.model, auth: prepared.auth };
+  })();
+  return _preparedClassifierPromise;
+}
+
+async function classifyWithAi(incoming, faqs) {
+  const prepared = await getPreparedClassifier();
+  const faqList = faqs
+    .map((faq, i) => {
+      const aliases = faq.aliases?.length ? ` (aliases: ${faq.aliases.slice(0, 4).join(", ")})` : "";
+      return `${i + 1}. ${faq.question}${aliases}`;
+    })
+    .join("\n");
+
+  const result = await completeWithPreparedSimpleCompletionModel({
+    cfg: prepared.cfg,
+    model: prepared.model,
+    auth: prepared.auth,
+    context: {
+      systemPrompt: [
+        "Bạn là hệ thống phân loại FAQ.",
+        "Cho một tin nhắn đầu vào, hãy tìm câu hỏi FAQ phù hợp nhất về mặt ngữ nghĩa.",
+        "Chấp nhận gõ tắt, gõ không dấu, paraphrase, lỗi chính tả, câu hỏi không đầy đủ.",
+        "Chỉ chọn FAQ khi ý nghĩa rõ ràng trùng khớp. Nếu không chắc, trả faqIndex null.",
+        "Không trả lời câu hỏi người dùng. Không bịa thêm FAQ. Chỉ trả JSON."
+      ].join(" "),
+      messages: [{
+        role: "user",
+        content: `Tin nhắn: "${incoming}"\n\nDanh sách FAQ:\n${faqList}\n\nTrả về JSON: {"faqIndex": number|null, "confidence": number (0.0-1.0), "reason": string}`,
+        timestamp: Date.now()
+      }]
+    },
+    options: { maxTokens: 100, reasoning: "low" }
+  });
+
+  const text = extractAssistantText(result) ?? "";
+  const jsonStr = text.trim().startsWith("{") ? text.trim() : (text.match(/\{[\s\S]*\}/) ?? [""])[0];
+  try {
+    const parsed = JSON.parse(jsonStr);
+    const idx = Number(parsed?.faqIndex);
+    const confidence = Number(parsed?.confidence) || 0;
+    const reason = typeof parsed?.reason === "string" ? parsed.reason : null;
+    if (!Number.isInteger(idx) || idx < 1 || idx > faqs.length)
+      return { faq: null, confidence, reason: reason ?? "no faq selected" };
+    return { faq: faqs[idx - 1], confidence, reason };
+  } catch {
+    return { faq: null, confidence: 0, reason: "json parse error" };
+  }
+}
+
 const PLUGIN_ROOT = dirname(fileURLToPath(import.meta.url));
 const FAQ_PATH = join(PLUGIN_ROOT, "faq.json");
 const CHANNEL_ID = "zalouser";
@@ -25,6 +88,8 @@ const LOG_PATH = join(process.env.HOME ?? ".", ".openclaw", "logs", "faq-autorep
 const MAX_SCORE = 0.35;
 const AMBIGUITY_GAP = 0.08;
 const DEDUPE_TTL_MS = 6 * 60 * 60 * 1000;
+const AGENT_ID = "main";
+const AI_CONFIDENCE_THRESHOLD = 0.7;
 
 const processedMessages = new Map();
 
@@ -132,7 +197,7 @@ function loadFaqs() {
   }
 }
 
-function findFaqMatch(messageText) {
+async function findFaqMatch(messageText) {
   const faqs = loadFaqs();
   const normalized = normalizeText(messageText);
   const normalizedStripped = removeDiacritics(normalized);
@@ -183,6 +248,27 @@ function findFaqMatch(messageText) {
   };
 }
 
+async function findFaqMatchWithAi(messageText) {
+  const faqs = loadFaqs();
+  const fuseResult = await findFaqMatch(messageText);
+  if (fuseResult.faq) return fuseResult;
+
+  // Fuse.js không match — thử AI fallback
+  let aiResult;
+  try {
+    aiResult = await classifyWithAi(messageText, faqs);
+  } catch (error) {
+    console.error("[faq-autoreply] AI fallback error: " + (error instanceof Error ? error.message : String(error)));
+    return { ...fuseResult, skippedReason: "ai_error" };
+  }
+
+  const { faq, confidence, reason } = aiResult;
+  if (!faq || confidence < AI_CONFIDENCE_THRESHOLD) {
+    return { faq: null, score: null, matchType: "ai", skippedReason: `ai_low_confidence:${confidence.toFixed(2)}` };
+  }
+  return { faq, score: confidence, matchType: "ai", skippedReason: null };
+}
+
 function writeDecisionLog({ event, ctx, incoming, matchedFaq, reply, fuseScore, matchType, skippedReason }) {
   const record = {
     timestamp: timestampFromEvent(event),
@@ -226,7 +312,7 @@ async function handleFaq(event, ctx = {}) {
 
   if (!rememberMessage(messageId)) return { handled: true };
 
-  const { faq, score, matchType, skippedReason } = findFaqMatch(incoming);
+  const { faq, score, matchType, skippedReason } = await findFaqMatchWithAi(incoming);
   writeDecisionLog({
     event, ctx, incoming,
     matchedFaq: faq ?? null,
