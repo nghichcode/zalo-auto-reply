@@ -41,11 +41,10 @@ async function classifyWithAi(incoming, faqs, history = []) {
     .map((faq, i) => `${i + 1}. Q: ${faq.question}\n   A: ${faq.answer}`)
     .join("\n\n");
 
-  const historyMessages = history.map(msg => ({
-    role: msg.role,
-    content: msg.content,
-    timestamp: msg.timestamp
-  }));
+  const historyText = history.length > 0
+    ? "\n\nLịch sử hội thoại gần đây (dùng làm ngữ cảnh):\n"
+      + history.map(m => `${m.role === "user" ? "Khách" : "Bot"}: ${m.content}`).join("\n")
+    : "";
 
   const result = await completeWithPreparedSimpleCompletionModel({
     cfg: prepared.cfg,
@@ -56,19 +55,17 @@ async function classifyWithAi(incoming, faqs, history = []) {
         "Bạn là hệ thống trả lời FAQ.",
         "Chỉ được dùng thông tin trong danh sách FAQ bên dưới.",
         "TUYỆT ĐỐI không dùng kiến thức bên ngoài, không tra mạng, không tự bịa thêm.",
-        "Dựa vào lịch sử hội thoại (nếu có) để hiểu ngữ cảnh của câu hỏi hiện tại.",
+        "Nếu câu hỏi hiện tại là follow-up từ lịch sử hội thoại (ví dụ: khách chọn một diện từ danh sách bot vừa liệt kê), hãy tự tin chọn FAQ phù hợp và đặt confidence >= 0.7.",
+        "Nếu không rõ tuổi khi hỏi làm hộ chiếu lần đầu, mặc định chọn FAQ cho người từ đủ 14 tuổi.",
         "Nếu câu hỏi liên quan: trả về faqIndex của mục phù hợp nhất và trích nguyên câu trả lời A của mục đó vào answer.",
         "Nếu không liên quan đến bất kỳ FAQ nào: faqIndex null, answer null.",
-        "Chỉ trả JSON."
-      ].join(" "),
-      messages: [
-        ...historyMessages,
-        {
-          role: "user",
-          content: `Tin nhắn: "${incoming}"\n\nDanh sách FAQ:\n${faqList}\n\nTrả về JSON: {"faqIndex": number|null, "answer": string|null, "confidence": number (0.0-1.0)}`,
-          timestamp: Date.now()
-        }
-      ]
+        "Chỉ trả JSON.",
+      ].join(" ") + historyText,
+      messages: [{
+        role: "user",
+        content: `Tin nhắn: "${incoming}"\n\nDanh sách FAQ:\n${faqList}\n\nTrả về JSON: {"faqIndex": number|null, "answer": string|null, "confidence": number (0.0-1.0)}`,
+        timestamp: Date.now()
+      }]
     },
     options: { maxTokens: 300, reasoning: "low" }
   });
@@ -97,7 +94,7 @@ const CHANNEL_ID = "zalouser";
 const LOG_PATH = join(process.env.HOME ?? ".", ".openclaw", "logs", "faq-autoreply.jsonl");
 const DEDUPE_TTL_MS = 6 * 60 * 60 * 1000;
 const AGENT_ID = "main";
-const AI_CONFIDENCE_THRESHOLD = 0.4;
+const AI_CONFIDENCE_THRESHOLD = 0.2;
 const CONV_TTL_MS = 30 * 60 * 1000;
 const MAX_CONV_MESSAGES = 10;
 
