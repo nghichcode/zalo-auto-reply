@@ -1,52 +1,119 @@
 [
   {
-    "question": "hello",
-    "aliases": ["hi", "hey", "heyy", "helo", "heloo"],
-    "answer": "Hi! How can I help you today?"
+    "question": "hộ chiếu là gì",
+    "aliases": [
+      "passport là gì",
+      "passport",
+      "hộ chiếu là gì vậy",
+      "hộ chiếu dùng để làm gì",
+      "công dụng hộ chiếu",
+      "định nghĩa hộ chiếu",
+      "passport là giấy tờ gì"
+    ],
+    "answer": "Hộ chiếu là giấy tờ do cơ quan có thẩm quyền cấp cho công dân để xuất nhập cảnh, xác nhận quốc tịch và danh tính."
   },
   {
-    "question": "how are you",
-    "aliases": ["how r u", "how are u", "hows it going", "how's it going", "how do you do"],
-    "answer": "I'm doing great. Thanks for asking!"
+    "question": "có những loại hộ chiếu nào",
+    "aliases": [
+      "các loại hộ chiếu",
+      "hộ chiếu có mấy loại",
+      "phân loại hộ chiếu",
+      "loại passport",
+      "passport có mấy loại",
+      "gồm những loại hộ chiếu nào"
+    ],
+    "answer": "Bao gồm hộ chiếu phổ thông (PT), hộ chiếu công vụ (CV) và hộ chiếu ngoại giao (NG)."
   },
   {
-    "question": "what is your name",
-    "aliases": ["whats your name", "what's your name", "your name", "who are you"],
-    "answer": "My name is Kataa Bot."
+    "question": "hộ chiếu phổ thông có thời hạn bao lâu",
+    "aliases": [
+      "thời hạn hộ chiếu phổ thông",
+      "passport phổ thông dùng được bao lâu",
+      "hộ chiếu hết hạn sau bao lâu",
+      "passport có thời hạn mấy năm",
+      "thời gian sử dụng hộ chiếu phổ thông"
+    ],
+    "answer": "10 năm cho người từ 14 tuổi trở lên và 5 năm cho trẻ em dưới 14 tuổi."
   },
   {
-    "question": "who created you",
-    "aliases": ["who made you", "who built you", "who is your creator"],
-    "answer": "I was created by my developer using OpenClaw."
+    "question": "hộ chiếu công vụ và ngoại giao khác gì",
+    "aliases": [
+      "so sánh hộ chiếu công vụ và ngoại giao",
+      "hộ chiếu công vụ khác hộ chiếu ngoại giao thế nào",
+      "passport công vụ và ngoại giao",
+      "phân biệt hộ chiếu công vụ ngoại giao",
+      "khác nhau giữa cv và ng"
+    ],
+    "answer": "Dành cho cán bộ khi công tác nước ngoài, miễn phí lệ phí và ưu tiên thủ tục."
   },
   {
-    "question": "what can you do",
-    "aliases": ["what do you do", "your features", "your abilities", "help me"],
-    "answer": "I can automatically reply to approved questions."
+    "question": "ai cần sở hữu hộ chiếu",
+    "aliases": [
+      "ai cần làm hộ chiếu",
+      "đối tượng cần hộ chiếu",
+      "khi nào cần hộ chiếu",
+      "có bắt buộc phải có hộ chiếu không",
+      "những ai được cấp hộ chiếu"
+    ],
+    "answer": "Bất kỳ công dân Việt Nam nào có nhu cầu xuất nhập cảnh."
   },
   {
-    "question": "where are you from",
-    "aliases": ["where do you live", "where are you located"],
-    "answer": "I'm running from a cloud server."
+    "question": "điều kiện làm hộ chiếu lần đầu",
+    "aliases": [
+      "điều kiện cấp hộ chiếu lần đầu",
+      "muốn làm hộ chiếu cần gì",
+      "làm passport lần đầu cần gì",
+      "yêu cầu làm hộ chiếu",
+      "đăng ký hộ chiếu lần đầu"
+    ],
+    "answer": "Có CCCD/CMND còn hiệu lực và không bị mất quốc tịch."
   },
   {
-    "question": "good morning",
-    "aliases": ["gm", "morning", "gud morning", "goood morning"],
-    "answer": "Good morning! Hope you have a great day."
+    "question": "thủ tục làm hộ chiếu lần đầu như thế nào",
+    "aliases": [
+      "cách làm hộ chiếu lần đầu",
+      "quy trình làm hộ chiếu",
+      "hướng dẫn làm passport lần đầu",
+      "đăng ký hộ chiếu như thế nào",
+      "làm hộ chiếu cần những bước gì",
+      "thủ tục cấp hộ chiếu"
+    ],
+    "answer": "Khai tờ TK01, chụp ảnh 4×6, nộp CCCD gốc tại phòng xuất nhập cảnh."
   },
   {
-    "question": "good night",
-    "aliases": ["gn", "nite", "goodnite", "good nite", "night"],
-    "answer": "Good night! Sleep well."
+    "question": "giấy tờ cần thiết để làm hộ chiếu lần đầu",
+    "aliases": [
+      "hồ sơ làm hộ chiếu",
+      "làm hộ chiếu cần giấy tờ gì",
+      "thành phần hồ sơ hộ chiếu",
+      "làm passport cần gì",
+      "chuẩn bị gì để làm hộ chiếu",
+      "thủ tục giấy tờ hộ chiếu"
+    ],
+    "answer": "CCCD/CMND, 1 ảnh 4×6, tờ khai TK01 và giấy tờ chứng minh nơi cư trú nếu khác tỉnh."
   },
   {
-    "question": "bye",
-    "aliases": ["goodbye", "cya", "see you", "see ya", "ttyl", "bbye"],
-    "answer": "Goodbye! See you again soon."
+    "question": "thời gian xử lý hộ chiếu lần đầu",
+    "aliases": [
+      "bao lâu có hộ chiếu",
+      "làm hộ chiếu mất bao lâu",
+      "thời gian cấp passport",
+      "khi nào nhận được hộ chiếu",
+      "xử lý hồ sơ hộ chiếu bao lâu",
+      "bao nhiêu ngày có hộ chiếu"
+    ],
+    "answer": "8–10 ngày làm việc (tùy địa phương)."
   },
   {
-    "question": "hola",
-    "aliases": ["ola", "holla"],
-    "answer": "kataa"
+    "question": "lệ phí làm hộ chiếu lần đầu",
+    "aliases": [
+      "chi phí làm hộ chiếu",
+      "làm hộ chiếu hết bao nhiêu tiền",
+      "giá làm passport",
+      "phí cấp hộ chiếu",
+      "tiền làm hộ chiếu",
+      "lệ phí passport"
+    ],
+    "answer": "200.000 đồng."
   }
 ]

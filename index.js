@@ -29,7 +29,16 @@ const DEDUPE_TTL_MS = 6 * 60 * 60 * 1000;
 const processedMessages = new Map();
 
 function normalizeText(value) {
-  return typeof value === "string" ? value.trim().replace(/\s+/g, " ").toLowerCase() : "";
+  if (typeof value !== "string") return "";
+  return value.normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function removeDiacritics(str) {
+  return str.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d");
+}
+
+function normalizeForFuzzy(value) {
+  return removeDiacritics(normalizeText(value));
 }
 
 function sleep(ms) {
@@ -105,12 +114,16 @@ function loadFaqs() {
           ? entry.aliases.filter((a) => typeof a === "string")
           : [];
         if (!question.trim() || !answer) return null;
+        const nq = normalizeText(question);
+        const na = aliases.map(normalizeText).filter(Boolean);
         return {
           question,
           aliases,
           answer,
-          normalizedQuestion: normalizeText(question),
-          normalizedAliases: aliases.map(normalizeText).filter(Boolean)
+          normalizedQuestion: nq,
+          normalizedAliases: na,
+          fuzzyQuestion: removeDiacritics(nq),
+          fuzzyAliases: na.map(removeDiacritics).filter(Boolean)
         };
       })
       .filter(Boolean);
@@ -122,18 +135,23 @@ function loadFaqs() {
 function findFaqMatch(messageText) {
   const faqs = loadFaqs();
   const normalized = normalizeText(messageText);
+  const normalizedStripped = removeDiacritics(normalized);
 
   if (!normalized) return { faq: null, score: null, matchType: null, skippedReason: "empty_message" };
   if (faqs.length === 0) return { faq: null, score: null, matchType: null, skippedReason: "no_faqs" };
 
+  // Exact match — thử cả có dấu lẫn không dấu
   for (const faq of faqs) {
-    if (faq.normalizedQuestion === normalized) return { faq, score: 0, matchType: "exact_question", skippedReason: null };
-    if (faq.normalizedAliases.includes(normalized)) return { faq, score: 0, matchType: "exact_alias", skippedReason: null };
+    if (faq.normalizedQuestion === normalized || faq.fuzzyQuestion === normalizedStripped)
+      return { faq, score: 0, matchType: "exact_question", skippedReason: null };
+    if (faq.normalizedAliases.includes(normalized) || faq.fuzzyAliases.includes(normalizedStripped))
+      return { faq, score: 0, matchType: "exact_alias", skippedReason: null };
   }
 
+  // Fuzzy match — dùng text đã bỏ dấu để khớp cả khi user gõ không dấu
   const rows = faqs.flatMap((faq) => [
-    { text: faq.normalizedQuestion, kind: "question", faq },
-    ...faq.normalizedAliases.map((alias) => ({ text: alias, kind: "alias", faq }))
+    { text: faq.fuzzyQuestion, kind: "question", faq },
+    ...faq.fuzzyAliases.map((alias) => ({ text: alias, kind: "alias", faq }))
   ]);
 
   const fuse = new Fuse(rows, {
@@ -141,10 +159,10 @@ function findFaqMatch(messageText) {
     includeScore: true,
     ignoreLocation: true,
     threshold: MAX_SCORE,
-    minMatchCharLength: 2
+    minMatchCharLength: 1
   });
 
-  const results = fuse.search(normalized, { limit: 4 });
+  const results = fuse.search(normalizedStripped, { limit: 4 });
   const best = results[0];
 
   if (!best) return { faq: null, score: null, matchType: "fuzzy", skippedReason: "no_fuzzy_match" };
