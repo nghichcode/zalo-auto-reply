@@ -54,7 +54,7 @@ async function classifyWithAi(incoming, faqs) {
         "Bạn là hệ thống phân loại FAQ.",
         "Cho một tin nhắn đầu vào, hãy tìm câu hỏi FAQ phù hợp nhất về mặt ngữ nghĩa.",
         "Chấp nhận gõ tắt, gõ không dấu, paraphrase, lỗi chính tả, câu hỏi không đầy đủ.",
-        "Chỉ chọn FAQ khi ý nghĩa rõ ràng trùng khớp. Nếu không chắc, trả faqIndex null.",
+        "Chọn FAQ khi ý nghĩa tương đối hoặc rõ ràng trùng khớp. Chỉ trả faqIndex null khi hoàn toàn không liên quan.",
         "Không trả lời câu hỏi người dùng. Không bịa thêm FAQ. Chỉ trả JSON."
       ].join(" "),
       messages: [{
@@ -89,7 +89,7 @@ const MAX_SCORE = 0.35;
 const AMBIGUITY_GAP = 0.08;
 const DEDUPE_TTL_MS = 6 * 60 * 60 * 1000;
 const AGENT_ID = "main";
-const AI_CONFIDENCE_THRESHOLD = 0.7;
+const AI_CONFIDENCE_THRESHOLD = 0.5;
 
 const processedMessages = new Map();
 
